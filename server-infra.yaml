@@ -1,0 +1,226 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Launch EC2 instance with a specified key pair
+Parameters:
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instances
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: admin.virginia
+    ConstraintDescription: Must be the name of an existing EC2 KeyPair.
+  ImageID:
+    Description: This is AMI for Bastion-Host 
+    Type: String
+    Default: ami-012967cc5a8c9f891
+  InstanceType:
+    Description: Enter Instance type t2.micro or t3.micro 
+    Type: String
+    AllowedValues:
+    - t2.micro
+    - t3.micro
+    Default: t2.micro  
+
+Resources:
+  MyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version:  '2012-10-17'
+        Statement:
+         -  Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Description: IAM role allows EC2 Access To S3
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+      MaxSessionDuration: 3600
+      Path: /
+      RoleName: IAMRole-Allows-EC2-Access-To-S3
+  
+  MyInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref MyRole
+
+
+
+  myEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      KeyName: !Ref KeyName
+      ImageId: !Ref ImageID
+      InstanceType: !Ref InstanceType
+      NetworkInterfaces:
+        - NetworkInterfaceId: !Ref MyNetworkInterface
+          DeviceIndex: 0
+      Tags:
+        - Key: Name
+          Value: d-ec2-bastion-host
+  
+  MyNetworkInterface:
+    Type: AWS::EC2::NetworkInterface
+    Properties:
+      SubnetId: !ImportValue Public1Id
+      Description: 'My Network Interface'
+      GroupSet: 
+        - !Ref SGforBastionHost
+  
+  TemplatesforProd:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: d-launch-template 
+      LaunchTemplateData:
+        IamInstanceProfile:
+          Name: !Ref MyInstanceProfile
+        ImageId: !Ref ImageID 
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref KeyName
+        UserData: !Base64 |
+              #!/bin/bash -ex
+              yum update -y
+              yum install -y httpd.x86_64
+              systemctl start httpd.service
+              systemctl enable httpd.service
+              echo “Hello World from $(hostname -f)” > /var/www/html/index.html
+        SecurityGroupIds:
+          - !Ref SGforProd
+
+
+  SGforBastionHost:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allows traffic SSH from MyIP
+      VpcId: !ImportValue MyVPCId
+      SecurityGroupIngress:
+        IpProtocol: TCP
+        FromPort: 22
+        ToPort: 22
+        CidrIp: 171.252.189.99/32
+      Tags:
+        - Key: Name
+          Value: d-sg-bastion-host
+  
+  SGforALB:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allows traffic from internet
+      VpcId: !ImportValue MyVPCId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: d-sg-alb
+  
+  
+  SGforProd:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allows traffic from ALB
+      VpcId: !ImportValue MyVPCId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref SGforALB
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          SourceSecurityGroupId: !Ref SGforBastionHost
+      Tags:
+        - Key: Name
+          Value: d-sg-prod
+  
+  MyTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckEnabled: true
+      Name: d-tg-prod
+      TargetType: instance
+      Port: 80
+      Protocol: HTTP
+      ProtocolVersion: HTTP1
+      VpcId: !ImportValue MyVPCId
+
+  listenerForHTTP:
+   Type: "AWS::ElasticLoadBalancingV2::Listener"
+   Properties:
+     DefaultActions:
+        Type: forward
+        TargetGroupArn: !Ref MyTargetGroup
+     LoadBalancerArn: !Ref ALBforProd
+     Port: 80
+     Protocol: "HTTP"
+
+  listenerForHTTPS:
+   Type: "AWS::ElasticLoadBalancingV2::Listener"
+   Properties:
+     DefaultActions:
+        Type: forward
+        TargetGroupArn: !Ref MyTargetGroup
+     LoadBalancerArn: !Ref ALBforProd
+     Port: 443
+     Protocol: "HTTPS"
+     Certificates:
+      - CertificateArn: arn:aws:acm:us-east-1:891377055161:certificate/6346c046-c5c1-46c7-a028-fb0cf42f4b83
+  
+  ListenerRule1:
+    Type: 'AWS::ElasticLoadBalancingV2::ListenerRule'
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref MyTargetGroup
+      Conditions:
+        - Field: path-pattern
+          Values: [/]
+      ListenerArn: !Ref listenerForHTTP
+      Priority: 1
+  
+  ALBforProd:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: application
+      IpAddressType: ipv4
+      Name: d-alb-prod
+      Scheme: internet-facing
+      SecurityGroups: 
+        - !Ref SGforALB
+      Subnets: 
+        - !ImportValue Public1Id
+        - !ImportValue Public2Id 
+   
+  
+  ASGforProd:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: d-asg-prod
+      LaunchTemplate:
+        LaunchTemplateId: !Ref TemplatesforProd
+        Version: !GetAtt TemplatesforProd.LatestVersionNumber
+      DesiredCapacity: '2'
+      MaxSize: '4'
+      MinSize: '1'
+      VPCZoneIdentifier: 
+        - !ImportValue Private1Id
+        - !ImportValue Private2Id
+      TargetGroupARNs:
+        - !Ref MyTargetGroup
+
+
+
+
+Outputs:
+  AlbURL:
+    Description: The URL of the Load Balancer
+    Value: !GetAtt ALBforProd.DNSName
+  AutoScalingGroupName:
+    Description: The name of the Auto Scaling
+    Value: !Ref ASGforProd
+
+

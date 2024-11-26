@@ -1,0 +1,209 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Build network infrastructure 
+Parameters: 
+  AZ:
+    Description: Availability Zone
+    Type: String
+  VpcCIDR:
+    Description: This is IP range for VPC 
+    Type: String
+    Default: 172.16.0.0/24
+  PublicSubnet1CIDR:
+    Description: This is IP range for PublicSubnet1CIDR
+    Type: String
+    Default: 172.16.0.0/26
+  PrivateSubnet1CIDR:
+    Description: This is IP range for PrivateSubnet1CIDR
+    Type: String
+    Default: 172.16.0.128/26
+  PublicSubnet2CIDR:
+    Description: This is IP range for PublicSubnet2CIDR
+    Type: String
+    Default: 172.16.0.64/26
+  PrivateSubnet2CIDR:
+    Description: This is IP range for PrivateSubnet2CIDR
+    Type: String
+    Default: 172.16.0.192/26
+Resources: 
+  myVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: d-vpc-01
+  igwVPC:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: igw-01
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref myVPC
+      InternetGatewayId: !Ref igwVPC
+  
+  
+  
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs '']
+      VpcId: !Ref myVPC
+      CidrBlock: !Ref PublicSubnet1CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: PublicSub1
+  
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs '']
+      VpcId: !Ref myVPC
+      CidrBlock: !Ref PrivateSubnet1CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: PrivateSub1
+  
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [1, !GetAZs '']
+      VpcId: !Ref myVPC
+      CidrBlock: !Ref PublicSubnet2CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: PublicSub2
+  
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [1, !GetAZs '']
+      VpcId: !Ref myVPC
+      CidrBlock: !Ref PrivateSubnet2CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: PrivateSub2
+  
+  routeTableName:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref myVPC
+      Tags:
+        - Key: Name
+          Value: rtb-01
+  
+  SubnetAssociationRouteTable:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+  
+  SubnetAssociationRouteTable1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+  
+  SubnetAssociationRouteTable2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref routeTableName
+  
+
+  SubnetAssociationRouteTable3:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref routeTableName
+  
+  myRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+       RouteTableId:
+         Ref: routeTableName
+       DestinationCidrBlock: 0.0.0.0/0
+       GatewayId: !Ref igwVPC
+  
+  NATGateway:
+   Type: AWS::EC2::NatGateway
+   Properties:
+      AllocationId: !GetAtt NATGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+      - Key: Name
+        Value: ngw-01
+  
+  NATGatewayEIP:
+   Type: AWS::EC2::EIP
+   Properties:
+      Domain: vpc
+  
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref myVPC
+      Tags:
+        - Key: Name
+          Value: private-routable-01
+
+  RouteNATGateway:
+   Type: AWS::EC2::Route
+   Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: '0.0.0.0/0'
+      NatGatewayId: !Ref NATGateway
+
+  
+
+
+  
+Outputs:
+  VPCId:
+    Description: The VPC ID
+    Value: !Ref myVPC
+    Export:
+      Name: MyVPCId
+  PublicSubnet1Id:
+    Description: The Public Subnet 1 ID
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: Public1Id
+  PrivateSubnet1Id:
+    Description: The Private Subnet 1 ID
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: Private1Id
+  PublicSubnet2Id:
+    Description: The Public Subnet 2 ID
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: Public2Id
+  PrivateSubnet2Id:
+    Description: The Private Subnet 2 ID
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: Private2Id
+  NatGatewayId:
+    Description: The NAT Gateway ID
+    Value: !Ref NATGateway
+    Export:
+      Name: NatgatewayId
+  RouteTableId:
+    Description: The Route Table ID
+    Value: !Ref routeTableName
+    Export:
+      Name: RoutetableId
+  PrivateRouteTableId:
+    Description: The Private Route Table ID
+    Value: !Ref PrivateRouteTable
+    Export:
+      Name: PrivateRtbId
